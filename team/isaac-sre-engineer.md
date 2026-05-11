@@ -69,11 +69,11 @@ Observability Stack Implementation
 
 The Golden Signals of Trading:
 
-Signal	Traditional IT	Forex Trading Equivalent
-Latency	Time to load a webpage	Tick-to-Trade Time: Milliseconds from data receipt to broker confirmation.
-Traffic	Requests per second	Tick Velocity: Bids/Asks arriving per second per currency pair.
-Errors	HTTP 500s	Rejections & Slippage: API "Insufficient Margin" errors, or execution price deviating > 1 pip from signal price.
-Saturation	CPU/Memory usage	Redis Queue Depth / Event Loop Lag: Backlog of unprocessed market data waiting for the Signal Engine.
+Signal,Traditional IT,Forex Trading Equivalent
+Latency,Time to load a webpage,Tick-to-Trade Time: Milliseconds from data receipt to broker confirmation.
+Traffic,Requests per second,Tick Velocity: Bids/Asks arriving per second per currency pair.
+Errors,HTTP 500s,"Rejections & Slippage: API ""Insufficient Margin"" errors, or execution price deviating > 1 pip from signal price."
+Saturation,CPU/Memory usage,Redis Queue Depth / Event Loop Lag: Backlog of unprocessed market data waiting for the Signal Engine.
 
 Automated Incident Response (Runbook Excerpt)
 

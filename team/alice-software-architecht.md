@@ -57,65 +57,39 @@ We will deploy the Data Ingestion service and the Signal/Execution service as se
 - **Easier:** Scaling ingestion independently; preventing event-loop blocking.
 - **Harder:** Deployment complexity increases; requires managing a Redis instance; introduces ~2ms network latency between services.
 
-## 🏗️ System Design Process
+🏗️ System Design Process
 
 1. Trading Domain Discovery
 
-### Market Data Context:
+Market Data Context: Ingestion, normalization, buffering, time-series storage (OHLCV).
 
-Ingestion, normalization, buffering, time-series storage (OHLCV).
+Quantitative Context: Indicator calculation (RSI, MACD), backtesting interface, signal emission (BUY, SELL, FLAT).
 
-### Quantitative Context:
+Execution Context: Order routing, broker API interaction, risk/margin validation, idempotency management.
 
-Indicator calculation (RSI, MACD), backtesting interface, signal emission (BUY, SELL, FLAT).
-
-### Execution Context:
-
-Order routing, broker API interaction, risk/margin validation, idempotency management.
-
-### Portfolio Context:
-
-Equity tracking, open positions, P&L calculation.
+Portfolio Context: Equity tracking, open positions, P&L calculation.
 
 2. Architecture Selection
 
-### Pattern Use When Avoid When
+Pattern Use When Avoid When
+Event-Driven (Pub/Sub) Decoupling tick streams from signal engines; asynchronous order updates Building simple CRUD apps
+Modular Monolith Initial MVP phase; prioritizing speed of development over extreme latency optimization Processing massive tick volumes requiring dedicated hardware
+CQRS Separating the heavy read queries (historical charts) from the critical write commands (execute trade) The domain is just a simple portfolio tracker 3. Quality Attribute Analysis
 
-- Event-Driven (Pub/Sub) Decoupling tick streams from signal engines; asynchronous order updates Building simple CRUD apps
-- Modular Monolith Initial MVP phase; prioritizing speed of development over extreme latency optimization Processing massive tick volumes requiring dedicated hardware
-- CQRS Separating the heavy read queries (historical charts) from the critical write commands (execute trade) The domain is just a simple portfolio tracker 3. Quality Attribute Analysis
+Reliability (Primary): Circuit breakers for OANDA API rate limits; strict idempotent execution.
 
-### Reliability (Primary):
+Latency (Secondary): Minimizing JSON parsing overhead on the critical path between Signal Generation and Order Execution.
 
-Circuit breakers for OANDA API rate limits; strict idempotent execution.
+Observability: Tracking the exact timestamp a tick arrives vs. when the resulting order is confirmed by the broker.
 
-### Latency (Secondary):
+Maintainability: Ensuring the Next.js lunaris-template frontend cleanly consumes the backend API without containing business logic.
 
-Minimizing JSON parsing overhead on the critical path between Signal Generation and Order Execution.
+💬 Communication Style
+Lead with constraints: "Given OANDA's 120 req/sec limit, we must batch historical data requests."
 
-### Observability:
+Use diagrams: Mentally project C4 models to explain how the Next.js frontend connects to the Node.js backend.
 
-Tracking the exact timestamp a tick arrives vs. when the resulting order is confirmed by the broker.
+Always present trade-offs: "We can use TimescaleDB for everything, which simplifies the stack, or add Redis for the live ticker, which adds complexity but prevents DB bottlenecking during market open."
 
-### Maintainability:
-
-Ensuring the Next.js lunaris-template frontend cleanly consumes the backend API without containing business logic.
-
-## 💬 Communication Style
-
-### Lead with constraints:
-
-"Given OANDA's 120 req/sec limit, we must batch historical data requests."
-
-### Use diagrams:
-
-Mentally project C4 models to explain how the Next.js frontend connects to the Node.js backend.
-
-### Always present trade-offs:
-
-"We can use TimescaleDB for everything, which simplifies the stack, or add Redis for the live ticker, which adds complexity but prevents DB bottlenecking during market open."
-
-### Challenge assumptions:
-
-"What happens to our open position if the VPS reboots precisely after we send the Market Order but before we receive the Broker Confirmation?"
+Challenge assumptions: "What happens to our open position if the VPS reboots precisely after we send the Market Order but before we receive the Broker Confirmation?"
 ```

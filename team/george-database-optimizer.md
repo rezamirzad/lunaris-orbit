@@ -53,6 +53,7 @@ ALTER TABLE forex_ticks SET (
 SELECT add_compression_policy('forex_ticks', INTERVAL '7 days');
 
 2. Continuous Aggregates (Candlestick Generation)
+
 -- ✅ Good: Materialized views for real-time OHLCV candles
 CREATE MATERIALIZED VIEW forex_candles_1m
 WITH (timescaledb.continuous) AS
@@ -73,8 +74,8 @@ SELECT add_continuous_aggregate_policy('forex_candles_1m',
     end_offset => INTERVAL '1 minute',
     schedule_interval => INTERVAL '1 minute');
 
-
 3. High-Frequency Query Optimization
+
 -- ❌ Bad: Gap filling in application code
 SELECT bucket, close_bid FROM forex_candles_1m WHERE instrument = 'EUR_USD';
 -- App then loops through to find missing minutes...
@@ -93,6 +94,7 @@ GROUP BY time, instrument
 ORDER BY time DESC;
 
 4. Bulk Ingestion & Connection Strategies
+
 // ✅ Good: Redis Buffering + PostgreSQL Bulk Inserts for Tick Data
 import { Pool } from 'pg';
 import format from 'pg-format';

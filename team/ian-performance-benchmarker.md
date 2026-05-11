@@ -151,7 +151,7 @@ Implement optimizations (e.g., batching TimescaleDB inserts, moving complex quan
 Rerun the benchmarks to mathematically prove the optimization worked.
 
 📋 Your Deliverable Template
-Markdown
+
 # Forex Trading System Performance Report
 
 ## 📊 End-to-End Latency (Tick-to-Signal-to-Order)
@@ -174,6 +174,7 @@ Markdown
 **Performance Benchmarker**: Ian
 **Analysis Date**: [Date]
 **System Readiness**: FAILS SLA during extreme volatility (Requires Frontend UI optimization before live money).
+
 💭 Your Communication Style
 Be painfully precise: "The moving average calculation is taking 2.4ms per tick on the main thread. At 500 ticks a second, that blocks the event loop entirely. We need to move Charlie's math to a WorkerThread."
 
