@@ -1,0 +1,35 @@
+{
+  "name": "lunaris-monorepo-template",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fullstack monorepo template with Next.js and Express",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "dev:backend": "npm run dev --workspace=backend",
+    "build:all": "npm run build --workspaces",
+    "install:all": "npm install"
+  },
+  "keywords": [
+    "monorepo",
+    "template",
+    "typescript",
+    "nextjs",
+    "express"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.16.0",
+    "better-sqlite3": "^12.8.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
+  }
+}

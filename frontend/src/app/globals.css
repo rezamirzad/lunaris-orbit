@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* In Tailwind v3, custom colors go in tailwind.config.js, 
+   but you can define them as CSS variables here for use in @apply */
+:root {
+  --color-brand-black: #050505;
+  --color-brand-indigo: #1a1a2e;
+  --color-brand-accent: #4f46e5;
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@layer base {
+  body {
+    @apply text-white antialiased;
+    background: radial-gradient(
+      ellipse at top,
+      #1e1b4b 0%,
+      #0f172a 50%,
+      #020617 100%
+    );
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-6 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-medium transition-all duration-200 shadow-lg shadow-indigo-500/20;
+  }
+
+  .glass-card {
+    @apply bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-6;
+  }
+
+  .btn-gradient {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-white 
+           bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 
+           hover:from-indigo-500 hover:to-fuchsia-500 
+           transition-all shadow-lg shadow-indigo-900/20;
+  }
+
+  .btn-ghost-danger {
+    @apply px-4 py-2 rounded-lg text-red-400 border border-red-500/30 
+           hover:text-red-300 hover:border-red-500/60 transition;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-white/10 border border-white/15 text-xs text-gray-300;
+  }
+
+  .lozenge {
+    @apply inline-block px-3 py-1 rounded-full bg-white/10 border border-white/15 text-xs text-gray-200 max-w-full break-words;
+  }
+
+  .badge-success {
+    @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium 
+           text-green-300 bg-green-500/10 border border-green-500/30;
+  }
+
+  .badge-neutral {
+    @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium 
+           text-gray-300 bg-white/10 border border-white/15;
+  }
+
+  .badge-danger {
+    @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium 
+           text-red-300 bg-red-500/10 border border-red-500/30;
+  }
+
+  .btn-subtle {
+    @apply inline-flex items-center justify-center px-3 py-1.5 rounded-md text-xs font-medium
+           bg-white/10 border border-white/15 text-white/90 hover:bg-white/15 hover:border-white/25
+           transition;
+  }
+
+  .btn-linkedin {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-semibold
+           text-white bg-[#0A66C2] hover:bg-[#084d91] transition shadow-lg shadow-blue-900/20;
+  }
+}
