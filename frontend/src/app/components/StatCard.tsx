@@ -5,6 +5,7 @@ import { twMerge } from 'tailwind-merge';
 interface StatCardProps {
   title: string;
   value: string | number;
+  formattedValue?: string; // Evan: Pre-formatted string to prevent hydration errors
   icon?: React.ReactNode;
   trend?: {
     value: string;
@@ -17,7 +18,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export const StatCard: React.FC<StatCardProps> = ({ title, value, icon, trend, className }) => {
+export const StatCard: React.FC<StatCardProps> = ({ title, value, formattedValue, icon, trend, className }) => {
   return (
     <div className={cn(
       "p-6 rounded-xl border border-white/10 bg-white/5 backdrop-blur-md transition-all hover:bg-white/10",
@@ -28,7 +29,7 @@ export const StatCard: React.FC<StatCardProps> = ({ title, value, icon, trend, c
         {icon && <div className="text-slate-400">{icon}</div>}
       </div>
       <div className="flex items-baseline justify-between">
-        <h3 className="text-2xl font-bold text-white">{value}</h3>
+        <h3 className="text-2xl font-bold text-white">{formattedValue || value}</h3>
         {trend && (
           <span className={cn(
             "text-xs font-medium px-2 py-0.5 rounded-full",

@@ -8,6 +8,10 @@ export class WebSocketManager {
   private brokerWs: WebSocket | null = null;
   private lastTickTime = 0;
   private readonly THROTTLE_MS = 500; // 2 ticks per second
+  private positions: any[] = [];
+  private lastPositionFetch = 0;
+  private readonly POSITION_REFRESH_MS = 5000;
+  private latestTick: { symbol: string; bid: number; ask: number; time: number; timestamp: string } | null = null;
 
   constructor(server: HttpServer, private brokerService: BrokerService) {
     this.io = new SocketServer(server, {
@@ -27,6 +31,36 @@ export class WebSocketManager {
 
   public async start() {
     await this.connectToBroker();
+  }
+
+  public getLatestTick() {
+    return this.latestTick;
+  }
+
+  /**
+   * Captures a high-fidelity market snapshot formatted for Supabase.
+   */
+  public captureSnapshot(epic: string) {
+    const tick = this.latestTick;
+    const bid = tick?.bid || 0;
+    const ask = tick?.ask || 0;
+
+    return {
+      symbol: epic,
+      ohlcv: {
+        open: bid,
+        high: bid,
+        low: bid,
+        close: bid,
+        volume: 0
+      },
+      market_context: {
+        bid: bid,
+        ask: ask,
+        spread: Number((ask - bid).toFixed(5)),
+        timestamp: tick?.timestamp || new Date().toISOString()
+      }
+    };
   }
 
   private async connectToBroker() {
@@ -80,21 +114,64 @@ export class WebSocketManager {
     this.brokerWs.send(JSON.stringify(subMsg));
   }
 
-  private handleBrokerMessage(data: WebSocket.Data) {
+  private async handleBrokerMessage(data: WebSocket.Data) {
     try {
       const msg = JSON.parse(data.toString());
       
       if (msg.destination === "quote" && msg.payload?.epic === "EURUSD") {
         const now = Date.now();
+        
+        // Refresh positions cache if expired
+        if (now - this.lastPositionFetch >= this.POSITION_REFRESH_MS) {
+          try {
+            const data = await this.brokerService.getPositions();
+            this.positions = data.positions || [];
+            this.lastPositionFetch = now;
+          } catch (e) {
+            console.error("Failed to refresh positions for P&L:", e);
+          }
+        }
+
         if (now - this.lastTickTime >= this.THROTTLE_MS) {
+          const bid = msg.payload.bid;
+          const ask = msg.payload.ofr;
+          
           const tick = {
             symbol: "EURUSD",
-            bid: msg.payload.bid,
-            ask: msg.payload.ofr,
+            bid,
+            ask,
+            time: Math.floor(Date.now() / 1000),
             timestamp: new Date().toISOString()
           };
+          this.latestTick = tick;
+          
+          // Calculate P&L for open positions
+          const pnlUpdates = this.positions
+            .filter(pos => pos.market.epic === "EURUSD")
+            .map(pos => {
+              const direction = pos.position.direction;
+              const entryPrice = pos.position.level;
+              const size = pos.position.size;
+              
+              // P&L calculation: (Current Price - Entry Price) * Size
+              // For BUY, we close at BID. For SELL, we close at ASK.
+              const currentPrice = direction === "BUY" ? bid : ask;
+              const pnl = direction === "BUY" 
+                ? (currentPrice - entryPrice) * size
+                : (entryPrice - currentPrice) * size;
+              
+              return {
+                dealId: pos.position.dealId,
+                pnl: Number(pnl.toFixed(2)),
+                currentPrice
+              };
+            });
           
           this.io.emit("price", tick);
+          if (pnlUpdates.length > 0) {
+            this.io.emit("pnl_update", pnlUpdates);
+          }
+          
           this.lastTickTime = now;
         }
       }
