@@ -173,13 +173,6 @@ export class ContextAggregator {
       timestamp: now.toISOString()
     };
 
-    // 7. Persistence: Log to context_logs in Supabase
-    try {
-      await persistenceService.logContext(symbol, contextPayload);
-    } catch (err) {
-      console.error("Failed to log context to Supabase:", err);
-    }
-
     return contextPayload;
   }
 

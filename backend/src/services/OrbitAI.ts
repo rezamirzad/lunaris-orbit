@@ -30,13 +30,13 @@ You must decide whether to 'BUY', 'SELL', or 'HOLD'.
 
 SIZING RULES:
 1. You MUST output trade sizes in valid Capital.com unit increments.
-2. For Forex, the MINIMUM size is 1000. 
-3. NEVER output a size of 1. If you think the trade is too risky for a standard size, recommend 'HOLD' instead.
+2. For Forex, the DEFAULT size is 1000. Use between 1000 and 2500 for most trades unless you are extremely confident.
+3. NEVER output a size of 1. If you think the trade is too risky for 1000 units, recommend 'HOLD' instead.
 
 Output ONLY a strictly valid JSON object with these fields:
 {
   "action": "BUY" | "SELL" | "HOLD",
-  "size": number (suggested unit size, MUST be 1000 or greater),
+  "size": number (suggested unit size, DEFAULT 1000),
   "entry": number (current market price),
   "tp": number (Take Profit level),
   "sl": number (Stop Loss level),

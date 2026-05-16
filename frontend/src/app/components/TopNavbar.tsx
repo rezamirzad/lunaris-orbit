@@ -17,7 +17,13 @@ interface TopNavbarProps {
 }
 
 export const TopNavbar: React.FC<TopNavbarProps> = ({ onMenuClick }) => {
-  const { balance, available_margin, used_margin, unrealized_pnl } = useAccountStore();
+  const { balance, available_margin, used_margin, unrealized_pnl, activePositions } = useAccountStore();
+
+  // Diana: Deriving total P&L from the same array used by the Portfolio table
+  // This ensures the Navbar is ALWAYS the exact sum of what's shown below.
+  const summedPnl = activePositions.length > 0 
+    ? activePositions.reduce((sum, pos) => sum + (pos.pnl || 0), 0)
+    : unrealized_pnl;
 
   return (
     <nav className="h-16 border-b border-white/5 bg-[#09090b]/80 backdrop-blur-md sticky top-0 z-50 px-6 flex items-center justify-between">
@@ -53,9 +59,9 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onMenuClick }) => {
           <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-tight">Performance (P&L)</span>
           <div className={cn(
             "text-sm font-mono font-bold flex items-center gap-1",
-            unrealized_pnl >= 0 ? "text-emerald-400" : "text-rose-400"
+            summedPnl >= 0 ? "text-emerald-400" : "text-rose-400"
           )}>
-            {unrealized_pnl >= 0 ? '+' : ''}{formatCurrency(unrealized_pnl)}
+            {summedPnl >= 0 ? '+' : ''}{formatCurrency(summedPnl)}
           </div>
         </div>
 

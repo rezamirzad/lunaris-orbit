@@ -13,14 +13,18 @@ import {
   TrendingUp,
   TrendingDown,
   Activity,
+  ShieldCheck,
 } from "lucide-react";
 import { StatCard, cn } from "./components/StatCard";
 import { PriceDisplay } from "./components/PriceDisplay";
 import { TradePanel } from "./components/TradePanel";
+import { TradeHistory } from "./components/TradeHistory";
 import { PortfolioView } from "./components/PortfolioView";
 import { MarketChart } from "./components/MarketChart";
 import { OrbitCommand } from "./components/OrbitCommand";
 import { TopNavbar } from "./components/TopNavbar";
+import { AISuggestionCard } from "./components/AISuggestionCard";
+import { ActiveAnalystWidget } from "./components/ActiveAnalystWidget";
 import { useAccountStore } from "./lib/store";
 import { io } from "socket.io-client";
 
@@ -29,8 +33,11 @@ export default function Dashboard() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [recentTrades, setRecentTrades] = useState<any[]>([]);
   const [liveTick, setLiveTick] = useState<any>(null);
-  const [history, setHistory] = useState<any[]>([]);
-  const [resolution, setResolution] = useState("MINUTE");
+
+  // AI Suggestion State
+  const [contextData, setContextData] = useState<any>(null);
+  const [suggestion, setSuggestion] = useState<any>(null);
+  const [isAiLoading, setIsAiLoading] = useState(false);
 
   // 1. Unified P&L Hydration (Diana & Evan)
   useEffect(() => {
@@ -63,8 +70,66 @@ export default function Dashboard() {
     fetchAccountLive(); // Immediate refresh
   };
 
+  const handlePrepareContext = async () => {
+    setIsAiLoading(true);
+    setContextData(null);
+    setSuggestion(null);
+    try {
+      const response = await fetch(
+        "http://localhost:4000/api/market/context?symbol=EURUSD",
+      );
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to fetch context");
+      }
+
+      setContextData(data);
+    } catch (err: any) {
+      console.error("Failed to fetch context:", err);
+      alert(`CONTEXT ERROR: ${err.message}`);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleGenerateSuggestion = async () => {
+    if (!contextData) return;
+    setIsAiLoading(true);
+    try {
+      const response = await fetch("http://localhost:4000/api/ai/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol: "EURUSD",
+          context_id: contextData.context_id,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "AI Consultation failed");
+      }
+
+      setSuggestion(data.suggestion);
+    } catch (err: any) {
+      console.error("Failed to generate suggestion:", err);
+      alert(`AI ERROR: ${err.message}`);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
   const handleExecuteSuggestion = async (suggestion: any) => {
     try {
+      if (suggestion.id) {
+        await fetch("http://localhost:4000/api/ai/confirm-suggestion", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: suggestion.id, is_confirmed: true }),
+        }).catch((err) => console.error("Failed to confirm suggestion:", err));
+      }
+
       const response = await fetch("http://localhost:4000/api/execute-trade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -74,8 +139,12 @@ export default function Dashboard() {
           size: suggestion.amount,
           sl: suggestion.stop_loss,
           tp: suggestion.take_profit,
-          currentPrice: liveTick?.bid || 0,
+          currentPrice: liveTick?.bid || suggestion.entry_price || suggestion.raw_ai_response?.entry,
           requestId: crypto.randomUUID(),
+          reasoning: suggestion.reasoning,
+          confidence: suggestion.confidence_score,
+          suggestion_id: suggestion.id,
+          context_id: suggestion.context_log_id || suggestion.context_id,
         }),
       });
 
@@ -87,12 +156,30 @@ export default function Dashboard() {
           size: suggestion.amount,
           timestamp: new Date().toLocaleTimeString(),
         });
+        setSuggestion(null); // Clear suggestion after execution
       } else {
         // Evan: Catching 400 errors from backend (Diana) and displaying broker message
         alert(`BROKER ERROR: ${data.error || "Execution failed"}`);
       }
     } catch (err) {
       console.error("Execution Error:", err);
+    }
+  };
+
+  const handleRejectSuggestion = async (suggestion: any) => {
+    if (suggestion?.id) {
+      try {
+        await fetch("http://localhost:4000/api/ai/confirm-suggestion", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: suggestion.id, is_confirmed: false }),
+        });
+        setSuggestion(null); // Clear after rejection
+      } catch (err) {
+        console.error("Failed to reject suggestion:", err);
+      }
+    } else {
+      setSuggestion(null);
     }
   };
 
@@ -146,75 +233,45 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
             {/* Left Column: Data & Portfolio (8 Units) */}
             <div className="xl:col-span-8 space-y-6">
-              <div className="flex-1 min-h-0">
-                <OrbitCommand
-                  onExecute={handleExecuteSuggestion}
-                  onReject={() => {}}
-                  currentPrice={liveTick?.bid}
-                />
-              </div>
+              <PriceDisplay />
+
+              <AISuggestionCard
+                contextData={contextData}
+                suggestion={suggestion}
+                isLoading={isAiLoading}
+                onPrepareContext={handlePrepareContext}
+                onGenerate={handleGenerateSuggestion}
+                onExecute={handleExecuteSuggestion}
+                onReject={handleRejectSuggestion}
+              />
+
+              {/* <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="rounded-xl border border-white/10 bg-white/5 p-6 flex flex-col justify-center items-center text-center">
+                  <Activity className="w-8 h-8 text-blue-500 mb-4 animate-pulse" />
+                  <h4 className="text-white font-bold mb-2 uppercase tracking-widest text-xs">System Health</h4>
+                  <p className="text-slate-500 text-[10px] leading-relaxed">
+                    Institutional execution pipeline active. <br />
+                    WebSocket latency: <span className="text-emerald-500 font-mono">24ms</span>
+                  </p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/5 p-6 flex flex-col justify-center items-center text-center opacity-50">
+                  <ShieldCheck className="w-8 h-8 text-emerald-500 mb-4" />
+                  <h4 className="text-white font-bold mb-2 uppercase tracking-widest text-xs">Compliance Audit</h4>
+                  <p className="text-slate-500 text-[10px] leading-relaxed">
+                    All actions are append-only. <br />
+                    FCA/SEC reporting protocol enabled.
+                  </p>
+                </div>
+              </div> */}
 
               <PortfolioView />
 
-              <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
-                <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between bg-white/5">
-                  <h3 className="font-semibold text-white">Recent Activity</h3>
-                </div>
-                <div className="p-0">
-                  {recentTrades.length === 0 ? (
-                    <div className="text-sm text-slate-500 text-center py-12 italic">
-                      No recent execution history.
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-white/5">
-                      {recentTrades.map((trade) => (
-                        <div
-                          key={trade.dealId}
-                          className="px-6 py-4 flex items-center justify-between hover:bg-white/5 transition-colors"
-                        >
-                          <div className="flex items-center gap-4">
-                            <div
-                              className={cn(
-                                "w-8 h-8 rounded-lg flex items-center justify-center",
-                                trade.direction === "BUY"
-                                  ? "bg-emerald-500/10 text-emerald-500"
-                                  : "bg-rose-500/10 text-rose-500",
-                              )}
-                            >
-                              {trade.direction === "BUY" ? (
-                                <TrendingUp className="w-4 h-4" />
-                              ) : (
-                                <TrendingDown className="w-4 h-4" />
-                              )}
-                            </div>
-                            <div>
-                              <div className="text-sm font-medium text-white">
-                                EUR/USD {trade.direction}
-                              </div>
-                              <div className="text-[10px] text-slate-500 font-mono">
-                                ID: {trade.dealId}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-sm font-bold text-white">
-                              {trade.size.toLocaleString("en-US")} Units
-                            </div>
-                            <div className="text-[10px] text-slate-500 uppercase tracking-widest">
-                              {trade.timestamp}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
+              <TradeHistory />
             </div>
 
-            {/* Right Column: Orbit Command (Top) & Execute Trade (Bottom) */}
-            <div className="xl:col-span-4 space-y-6 max-h-[calc(100vh-120px)] overflow-hidden flex flex-col">
-              <PriceDisplay />
+            {/* Right Column: AI Analysis (Top) & Manual Execute (Bottom) */}
+            <div className="xl:col-span-4 space-y-6 sticky top-6 self-start">
+              <ActiveAnalystWidget />
 
               <TradePanel onTradeSuccess={handleTradeSuccess} />
             </div>

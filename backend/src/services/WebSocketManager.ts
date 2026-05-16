@@ -6,12 +6,12 @@ import { BrokerService } from "./BrokerService.js";
 export class WebSocketManager {
   private io: SocketServer;
   private brokerWs: WebSocket | null = null;
-  private lastTickTime = 0;
-  private readonly THROTTLE_MS = 500; // 2 ticks per second
+  private lastTickTime: Record<string, number> = {};
+  private readonly THROTTLE_MS = 300; // 3 ticks per second
   private positions: any[] = [];
   private lastPositionFetch = 0;
   private readonly POSITION_REFRESH_MS = 5000;
-  private latestTick: { symbol: string; bid: number; ask: number; time: number; timestamp: string } | null = null;
+  private latestTicks: Record<string, { symbol: string; bid: number; ask: number; time: number; timestamp: string }> = {};
 
   constructor(server: HttpServer, private brokerService: BrokerService) {
     this.io = new SocketServer(server, {
@@ -33,15 +33,15 @@ export class WebSocketManager {
     await this.connectToBroker();
   }
 
-  public getLatestTick() {
-    return this.latestTick;
+  public getLatestTick(symbol: string = "EURUSD") {
+    return this.latestTicks[symbol] || null;
   }
 
   /**
    * Captures a high-fidelity market snapshot formatted for Supabase.
    */
   public captureSnapshot(epic: string) {
-    const tick = this.latestTick;
+    const tick = this.latestTicks[epic];
     const bid = tick?.bid || 0;
     const ask = tick?.ask || 0;
 
@@ -105,10 +105,10 @@ export class WebSocketManager {
 
     const subMsg = {
       destination: "marketData.subscribe",
-      correlationId: "eurusd-sub",
+      correlationId: "multi-symbol-sub",
       cst,
       securityToken,
-      payload: { epics: ["EURUSD"] }
+      payload: { epics: ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF"] }
     };
 
     this.brokerWs.send(JSON.stringify(subMsg));
@@ -118,7 +118,8 @@ export class WebSocketManager {
     try {
       const msg = JSON.parse(data.toString());
       
-      if (msg.destination === "quote" && msg.payload?.epic === "EURUSD") {
+      if (msg.destination === "quote") {
+        const epic = msg.payload.epic;
         const now = Date.now();
         
         // Refresh positions cache if expired
@@ -132,22 +133,23 @@ export class WebSocketManager {
           }
         }
 
-        if (now - this.lastTickTime >= this.THROTTLE_MS) {
+        const lastTickTime = this.lastTickTime[epic] || 0;
+        if (now - lastTickTime >= this.THROTTLE_MS) {
           const bid = msg.payload.bid;
           const ask = msg.payload.ofr;
           
           const tick = {
-            symbol: "EURUSD",
+            symbol: epic,
             bid,
             ask,
             time: Math.floor(Date.now() / 1000),
             timestamp: new Date().toISOString()
           };
-          this.latestTick = tick;
+          this.latestTicks[epic] = tick;
           
-          // Calculate P&L for open positions
+          // Calculate P&L for open positions of THIS epic
           const pnlUpdates = this.positions
-            .filter(pos => pos.market.epic === "EURUSD")
+            .filter(pos => pos.market.epic === epic)
             .map(pos => {
               const direction = pos.position.direction;
               const entryPrice = pos.position.level;
@@ -172,7 +174,7 @@ export class WebSocketManager {
             this.io.emit("pnl_update", pnlUpdates);
           }
           
-          this.lastTickTime = now;
+          this.lastTickTime[epic] = now;
         }
       }
     } catch (e) {

@@ -9,6 +9,7 @@ import { calendarService } from "./services/CalendarService.js";
 import { orbitAI } from "./services/OrbitAI.js";
 import { persistenceService } from "./services/PersistenceService.js";
 import { contextAggregator } from "./services/ContextAggregator.js";
+import { supabase } from "./lib/supabaseClient.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -20,7 +21,7 @@ const broker = new BrokerService();
 const wsManager = new WebSocketManager(httpServer, broker);
 
 // Wire tick provider for market snapshots
-broker.setTickProvider(() => wsManager.getLatestTick());
+broker.setTickProvider((symbol: string) => wsManager.getLatestTick(symbol));
 
 // Rate limiter to prevent double-clicks/spam
 const tradeLimiter = rateLimit({
@@ -80,37 +81,38 @@ app.get("/api/market/context", async (req, res) => {
   const { symbol = "EURUSD" } = req.query;
   try {
     const context = await contextAggregator.generateMarketContext(symbol as string);
-    res.json(context);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/market/context", async (req, res) => {
-  const { symbol = "EURUSD" } = req.query;
-  try {
-    const context = await contextAggregator.generateMarketContext(symbol as string);
-    res.json(context);
+    // Explicitly save the context to DB
+    const savedContext = await persistenceService.logContext(symbol as string, context);
+    res.json({ context, context_id: savedContext.id });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
 app.post("/api/ai/suggest", async (req, res) => {
-  const { symbol = "EURUSD" } = req.body;
+  const { symbol = "EURUSD", context_id } = req.body;
   try {
     const context = await contextAggregator.generateMarketContext(symbol as string);
     const suggestion = await orbitAI.generateSuggestion(context);
+
+    let finalContextId = context_id;
+    if (!finalContextId) {
+      const savedContext = await persistenceService.logContext(symbol as string, context);
+      finalContextId = savedContext.id;
+    }
 
     const savedSuggestion = await persistenceService.insertTradeSuggestion({
       pair: symbol as string,
       action: suggestion.action,
       amount: suggestion.size,
+      entry_price: suggestion.entry,
       stop_loss: suggestion.sl,
       take_profit: suggestion.tp,
       confidence_score: suggestion.confidence,
       reasoning: suggestion.primary_reason,
-      suggestion_type: 'NEW_TRADE'
+      suggestion_type: 'NEW_TRADE',
+      raw_ai_response: suggestion,
+      context_log_id: finalContextId
     });
 
     res.json({ suggestion: savedSuggestion, context });
@@ -120,7 +122,7 @@ app.post("/api/ai/suggest", async (req, res) => {
 });
 
 app.post("/api/ai/analyze-active", async (req, res) => {
-  const { trade_id, symbol = "EURUSD", entry, sl, tp, current_price } = req.body;
+  const { trade_id, trade_ledger_id, symbol = "EURUSD", entry, sl, tp, current_price, context_id } = req.body;
   try {
     const context = await contextAggregator.generateMarketContext(symbol as string);
     const analysis = await orbitAI.analyzeActiveTrade(context, { 
@@ -131,13 +133,22 @@ app.post("/api/ai/analyze-active", async (req, res) => {
       current_price 
     });
 
+    let finalContextId = context_id;
+    if (!finalContextId) {
+      const savedContext = await persistenceService.logContext(symbol as string, context);
+      finalContextId = savedContext.id;
+    }
+
     const savedSuggestion = await persistenceService.insertTradeSuggestion({
       pair: symbol as string,
       action: analysis.recommendation === 'CLOSE_NOW' ? 'SELL' : 'HOLD',
       amount: 0,
       confidence_score: 100,
       reasoning: analysis.reasoning,
-      suggestion_type: 'ACTIVE_ANALYSIS'
+      suggestion_type: 'ACTIVE_ANALYSIS',
+      raw_ai_response: analysis,
+      context_log_id: finalContextId,
+      trade_ledger_id: trade_ledger_id
     });
 
     res.json({ analysis: savedSuggestion, raw_ai: analysis });
@@ -146,47 +157,40 @@ app.post("/api/ai/analyze-active", async (req, res) => {
   }
 });
 
-app.post("/api/execute-trade", async (req, res) => {
-  const { epic, direction, size, sl, tp, requestId } = req.body;
+app.post("/api/ai/confirm-suggestion", async (req, res) => {
+  const { id, is_confirmed } = req.body;
+  try {
+    const data = await persistenceService.updateSuggestionStatus(id, is_confirmed);
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-  // Alice: Institutional Boundary Checks
+app.post("/api/execute-trade", async (req, res) => {
+  const { epic, direction, size, sl, tp, requestId, reasoning, confidence, suggestion_id, context_id, currentPrice } = req.body;
+
+  // Alice: Institutional Boundary Checks with minor safety buffer
+  const buffer = 0.00005; // 0.5 pip safety buffer for Forex
+  
   if (direction === 'BUY') {
-    if (sl && sl >= req.body.currentPrice) {
-      return res.status(400).json({ error: "INVALID_BOUNDARIES: Stop Loss must be below current price for BUY trades." });
+    if (sl && sl >= (currentPrice - buffer)) {
+      return res.status(400).json({ error: "INVALID_BOUNDARIES: Stop Loss must be safely below current price for BUY trades." });
     }
-    if (tp && tp <= req.body.currentPrice) {
-      return res.status(400).json({ error: "INVALID_BOUNDARIES: Take Profit must be above current price for BUY trades." });
+    if (tp && tp <= (currentPrice + buffer)) {
+      return res.status(400).json({ error: "INVALID_BOUNDARIES: Take Profit must be safely above current price for BUY trades." });
     }
   } else if (direction === 'SELL') {
-    if (sl && sl <= req.body.currentPrice) {
-      return res.status(400).json({ error: "INVALID_BOUNDARIES: Stop Loss must be above current price for SELL trades." });
+    if (sl && sl <= (currentPrice + buffer)) {
+      return res.status(400).json({ error: "INVALID_BOUNDARIES: Stop Loss must be safely above current price for SELL trades." });
     }
-    if (tp && tp >= req.body.currentPrice) {
-      return res.status(400).json({ error: "INVALID_BOUNDARIES: Take Profit must be below current price for SELL trades." });
+    if (tp && tp >= (currentPrice - buffer)) {
+      return res.status(400).json({ error: "INVALID_BOUNDARIES: Take Profit must be safely below current price for SELL trades." });
     }
   }
 
   try {
-    const snapshot = await broker.captureSnapshot(epic);
-    const data = await broker.placeMarketOrder(epic, direction, size, sl, tp);
-
-    // Log with Initial Risk Parameters (Diana & Alice)
-    await persistenceService.insertTradeLog({
-      market_snapshot_id: snapshot.id,
-      broker_transaction_id: data.dealReference,
-      direction,
-      size,
-      entry_price: req.body.currentPrice || 0,
-      stop_loss: sl,
-      take_profit: tp,
-      initial_sl: sl,
-      initial_tp: tp,
-      initial_max_profit_potential: tp ? Math.abs(tp - req.body.currentPrice) * size : null,
-      initial_max_loss_potential: sl ? Math.abs(req.body.currentPrice - sl) * size : null,
-      status: 'EXECUTED',
-      broker_response: data
-    });
-
+    const data = await broker.placeMarketOrder(epic, direction, size, sl, tp, reasoning, confidence, suggestion_id, context_id);
     res.json({ dealReference: data.dealReference });
   } catch (error: any) {
     const brokerError = error.response?.data;
@@ -214,6 +218,17 @@ app.put("/api/modify-trade", async (req, res) => {
   }
 });
 
+// Diana: Adding alias for consistent naming across team modules
+app.put("/api/trade/modify", async (req, res) => {
+  const { dealId, stopLoss, takeProfit } = req.body;
+  try {
+    const data = await broker.modifyPosition(dealId, stopLoss, takeProfit);
+    res.json({ success: true, data });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/close-trade", async (req, res) => {
   const { deal_id } = req.body;
   try {
@@ -236,15 +251,24 @@ app.get("/api/history", async (req, res) => {
 
 app.get("/api/account/live", async (req, res) => {
   try {
-    const data = await broker.getAccountData();
-    const account = data.accountInfo || {};
+    const [accountData, positionsResponse] = await Promise.all([
+      broker.getAccountData(),
+      broker.getPositions()
+    ]);
+
+    const account = accountData.accountInfo || {};
+    const positions = positionsResponse.positions || [];
+
+    // Diana: Centralizing calculation by summing unrealized P&L from individual positions
+    // This ensures consistency between the Top Navbar and the Portfolio table.
+    const performancePnl = positions.reduce((sum: number, p: any) => sum + (p.position.upl || 0), 0);
     
     // Optimized payload for frontend useAccountStore
     res.json({
       balance: account.balance || 0,
       available_margin: account.available || 0,
       used_margin: account.deposit || 0,
-      unrealized_pnl: account.profitLoss || 0,
+      unrealized_pnl: performancePnl,
       timestamp: new Date().toISOString()
     });
   } catch (error: any) {
@@ -317,6 +341,48 @@ app.get("/api/portfolio/active", async (req, res) => {
     res.json(reconciled);
   } catch (error: any) {
     console.error("Portfolio Fetch Error:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/portfolio/history", async (req, res) => {
+  try {
+    const history = await persistenceService.fetchTradeHistory();
+    res.json(history);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/portfolio/audit/:dealId", async (req, res) => {
+  const { dealId } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('trade_ledger')
+      .select(`
+        *,
+        market_snapshots!market_snapshot_id (*),
+        ai_logs!trade_ledger_id (*),
+        trade_activities!fk_trade_activities_ledger (*),
+        trade_suggestions!trade_suggestion_id (*)
+      `)
+      .eq('broker_transaction_id', dealId)
+      .single();
+
+    if (error) {
+      return res.status(404).json({ error: "Audit not found" });
+    }
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/portfolio/suggestions", async (req, res) => {
+  try {
+    const suggestions = await persistenceService.fetchTradeSuggestions();
+    res.json(suggestions);
+  } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });

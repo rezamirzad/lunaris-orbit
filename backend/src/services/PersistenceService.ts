@@ -63,7 +63,7 @@ export class PersistenceService {
    * Inserts a trade execution record linked to a market snapshot.
    * Includes immutable 'Initial' risk parameters for advanced auditing.
    */
-  async insertTradeLog(trade: TradeLog) {
+  async insertTradeLog(trade: TradeLog & { trade_suggestion_id?: string; context_log_id?: string }) {
     const { data, error } = await supabase
       .from('trade_ledger')
       .insert({
@@ -79,7 +79,9 @@ export class PersistenceService {
         initial_max_profit_potential: trade.initial_max_profit_potential,
         initial_max_loss_potential: trade.initial_max_loss_potential,
         status: trade.status,
-        broker_response: trade.broker_response
+        broker_response: trade.broker_response,
+        trade_suggestion_id: trade.trade_suggestion_id,
+        context_log_id: trade.context_log_id
       })
       .select()
       .single();
@@ -93,14 +95,14 @@ export class PersistenceService {
   }
 
   /**
-   * Updates an existing trade record (e.g., when a position is closed).
+   * Updates an existing trade record (e.g., when a position is modified or closed).
    */
-  async updateTradeStatus(dealId: string, status: string, additionalResponse?: any) {
+  async updateTradeStatus(dealId: string, status: string, updates: any = {}) {
     const { data, error } = await supabase
       .from('trade_ledger')
       .update({ 
         status,
-        broker_response: additionalResponse 
+        ...updates
       })
       .eq('broker_transaction_id', dealId)
       .select()
@@ -145,11 +147,15 @@ export class PersistenceService {
     pair: string, 
     action: 'BUY' | 'SELL' | 'HOLD', 
     amount: number, 
+    entry_price?: number,
     stop_loss?: number, 
     take_profit?: number, 
     confidence_score: number,
     reasoning?: string,
-    suggestion_type?: 'NEW_TRADE' | 'ACTIVE_ANALYSIS'
+    suggestion_type?: 'NEW_TRADE' | 'ACTIVE_ANALYSIS',
+    raw_ai_response?: any,
+    context_log_id?: string,
+    trade_ledger_id?: string
   }) {
     const { data, error } = await supabase
       .from('trade_suggestions')
@@ -157,12 +163,16 @@ export class PersistenceService {
         pair: suggestion.pair,
         action: suggestion.action,
         amount: suggestion.amount,
+        entry_price: suggestion.entry_price,
         stop_loss: suggestion.stop_loss,
         take_profit: suggestion.take_profit,
         confidence_score: suggestion.confidence_score,
         reasoning: suggestion.reasoning,
         suggestion_type: suggestion.suggestion_type || 'NEW_TRADE',
-        is_automated: false,
+        raw_ai_response: suggestion.raw_ai_response,
+        context_log_id: suggestion.context_log_id,
+        trade_ledger_id: suggestion.trade_ledger_id,
+        decision_status: 'PENDING',
         user_confirmed: false
       })
       .select()
@@ -170,9 +180,24 @@ export class PersistenceService {
 
     if (error) {
       console.error('Error inserting trade suggestion:', error);
+      console.error('Payload:', {
+        pair: suggestion.pair,
+        action: suggestion.action,
+        amount: suggestion.amount,
+        entry_price: suggestion.entry_price,
+        stop_loss: suggestion.stop_loss,
+        take_profit: suggestion.take_profit,
+        confidence_score: suggestion.confidence_score,
+        reasoning: suggestion.reasoning,
+        suggestion_type: suggestion.suggestion_type || 'NEW_TRADE',
+        context_log_id: suggestion.context_log_id,
+        trade_ledger_id: suggestion.trade_ledger_id,
+        raw_ai_response: suggestion.raw_ai_response
+      });
       throw error;
     }
 
+    console.log('Successfully logged AI suggestion to DB:', data.id);
     return data;
   }
 
@@ -203,12 +228,114 @@ export class PersistenceService {
   async fetchReconciledPositions(dealIds: string[]) {
     const { data, error } = await supabase
       .from('trade_ledger')
-      .select('broker_transaction_id, initial_sl, initial_tp')
+      .select('broker_transaction_id, initial_sl, initial_tp, id')
       .in('broker_transaction_id', dealIds);
 
     if (error) {
       console.error('Error fetching reconciled positions:', error);
       return [];
+    }
+
+    return data;
+  }
+
+  /**
+   * Fetches trade suggestions from the AI.
+   */
+  async fetchTradeSuggestions() {
+    const { data, error } = await supabase
+      .from('trade_suggestions')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching trade suggestions:', error);
+      throw error;
+    }
+
+    return data;
+  }
+
+  /**
+   * Updates the user confirmation status of a trade suggestion.
+   */
+  async updateSuggestionStatus(id: string, isConfirmed: boolean) {
+    const { data, error } = await supabase
+      .from('trade_suggestions')
+      .update({ 
+        user_confirmed: isConfirmed,
+        decision_status: isConfirmed ? 'ACCEPTED' : 'REJECTED'
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating suggestion status:', error);
+      throw error;
+    }
+
+    return data;
+  }
+
+  /**
+   * Logs a specific activity related to a trade (e.g. Entry, Modification, Closure).
+   */
+  async logTradeActivity(activity: {
+    trade_ledger_id: string;
+    activity_type: 'ENTRY' | 'MODIFICATION' | 'CLOSURE';
+    price?: number;
+    stop_loss?: number | null;
+    take_profit?: number | null;
+    pnl?: number;
+    broker_response?: any;
+  }) {
+    const { data, error } = await supabase
+      .from('trade_activities')
+      .insert({
+        trade_ledger_id: activity.trade_ledger_id,
+        activity_type: activity.activity_type,
+        price: activity.price,
+        stop_loss: activity.stop_loss,
+        take_profit: activity.take_profit,
+        pnl: activity.pnl,
+        broker_response: activity.broker_response
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error logging trade activity:', error);
+      throw error;
+    }
+
+    return data;
+  }
+
+  /**
+   * Fetches the complete trade history, joined with AI reasoning logs and granular activities.
+   */
+  async fetchTradeHistory() {
+    const { data, error } = await supabase
+      .from('trade_ledger')
+      .select(`
+        *,
+        market_snapshots!market_snapshot_id (*),
+        ai_logs!trade_ledger_id (*),
+        trade_activities!fk_trade_activities_ledger (*),
+        initiating_suggestion:trade_suggestions!trade_suggestion_id (*),
+        related_suggestions:trade_suggestions!trade_ledger_id (*)
+      `)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching trade history:', error);
+      throw error;
+    }
+
+    // DEBUG: Ensure broker_response is being fetched
+    if (data && data.length > 0) {
+      console.log(`Fetched ${data.length} trade records. Sample broker_response type: ${typeof data[0].broker_response}`);
     }
 
     return data;

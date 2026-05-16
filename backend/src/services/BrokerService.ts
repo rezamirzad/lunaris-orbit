@@ -7,7 +7,7 @@ export class BrokerService {
   private securityToken: string | null = null;
   private streamingHost: string | null = null;
   private sessionData: any = null;
-  private tickProvider: (() => any) | null = null;
+  private tickProvider: ((epic: string) => any) | null = null;
 
   constructor() {
     this.client = axios.create({
@@ -19,7 +19,7 @@ export class BrokerService {
     });
   }
 
-  public setTickProvider(provider: () => any) {
+  public setTickProvider(provider: (epic: string) => any) {
     this.tickProvider = provider;
   }
 
@@ -36,7 +36,7 @@ export class BrokerService {
   }
 
   async captureSnapshot(epic: string) {
-    const tick = this.tickProvider ? this.tickProvider() : null;
+    const tick = this.tickProvider ? this.tickProvider(epic) : null;
     
     // Fallback if no tick provider or no data yet
     const bid = tick?.bid || 0;
@@ -126,7 +126,7 @@ export class BrokerService {
     };
   }
 
-  async placeMarketOrder(epic: string, direction: "BUY" | "SELL", size: number, stopLoss: number | null = null, takeProfit: number | null = null) {
+  async placeMarketOrder(epic: string, direction: "BUY" | "SELL", size: number, stopLoss: number | null = null, takeProfit: number | null = null, reasoning?: string, confidence?: number, suggestionId?: string, contextId?: string) {
     if (!this.cst || !this.securityToken) {
       await this.authenticate();
     }
@@ -155,7 +155,7 @@ export class BrokerService {
       };
 
       if (stopLoss) payload.stopLevel = stopLoss;
-      if (takeProfit) payload.limitLevel = takeProfit;
+      if (takeProfit) payload.profitLevel = takeProfit;
 
       const response = await this.client.post(
         "/api/v1/positions",
@@ -168,24 +168,62 @@ export class BrokerService {
         }
       );
 
-      // 2. Persistence: Log trade
+      // 2. Persistence: Log trade (Institutional Audit)
       try {
-        await persistenceService.insertTradeLog({
-          market_snapshot_id: snapshot.id,
+        const bid = snapshot?.market_context?.bid || 0;
+        const ask = snapshot?.market_context?.ask || 0;
+        const entryPrice = direction === 'BUY' ? ask : bid;
+        
+        // Static P&L Projections for EUR/USD (Base EUR account)
+        const calculatePotential = (target: number) => {
+          if (!entryPrice) return 0;
+          const rawUsdPnL = direction === 'BUY' ? (target - entryPrice) * size : (entryPrice - target) * size;
+          return rawUsdPnL / entryPrice; // Convert to EUR using entry rate
+        };
+
+        const ledger = await persistenceService.insertTradeLog({
+          market_snapshot_id: snapshot?.id,
           broker_transaction_id: response.data.dealReference,
           direction,
           size,
-          entry_price: 0, 
+          entry_price: entryPrice,
           stop_loss: stopLoss,
           take_profit: takeProfit,
+          initial_sl: stopLoss,
+          initial_tp: takeProfit,
+          initial_max_profit_potential: takeProfit ? calculatePotential(takeProfit) : null,
+          initial_max_loss_potential: stopLoss ? calculatePotential(stopLoss) : null,
           status: 'EXECUTED',
+          broker_response: response.data,
+          trade_suggestion_id: suggestionId,
+          context_log_id: contextId
+        });
+
+        // 3. Log Initial Activity (Grouped History)
+        await persistenceService.logTradeActivity({
+          trade_ledger_id: ledger.id,
+          activity_type: 'ENTRY',
+          price: entryPrice,
+          stop_loss: stopLoss,
+          take_profit: takeProfit,
           broker_response: response.data
         });
+
+        // 4. AI Reasoning Audit
+        if (reasoning) {
+          await persistenceService.logAIReasoning(
+            ledger.id,
+            snapshot.id,
+            { reasoning },
+            confidence || 0
+          );
+        }
+
+        return response.data;
       } catch (logError) {
         console.error("Failed to log trade to persistence:", logError);
+        return response.data; // Still return success since broker order went through
       }
-
-      return response.data;
     } catch (error: any) {
       if (error.response?.status === 401) {
         // Token expired, re-authenticate and retry once
@@ -198,7 +236,7 @@ export class BrokerService {
           orderType: "MARKET",
         };
         if (stopLoss) payload.stopLevel = stopLoss;
-        if (takeProfit) payload.limitLevel = takeProfit;
+        if (takeProfit) payload.profitLevel = takeProfit; // FIXED: Changed limitLevel to profitLevel
 
         const retryResponse = await this.client.post(
           "/api/v1/positions",
@@ -315,8 +353,9 @@ export class BrokerService {
     try {
       const payload: any = {};
       if (stopLevel) payload.stopLevel = stopLevel;
-      if (profitLevel) payload.limitLevel = profitLevel;
+      if (profitLevel) payload.profitLevel = profitLevel;
 
+      // Diana: Capital.com uses PUT /positions/{dealId} to modify SL/TP
       const response = await this.client.put(
         `/api/v1/positions/${dealId}`,
         payload,
@@ -328,24 +367,40 @@ export class BrokerService {
         }
       );
 
-      // Auditing: Update the ledger with new SL/TP (but keep initial_ columns)
+      // Auditing: Update the ledger with new SL/TP
+      let ledgerId = null;
       try {
-        await persistenceService.updateTradeStatus(dealId, 'MODIFIED', {
-          modification_response: response.data,
-          new_sl: stopLevel,
-          new_tp: profitLevel,
-          modified_at: new Date().toISOString()
+        const ledger = await persistenceService.updateTradeStatus(dealId, 'MODIFIED', {
+          broker_response: response.data,
+          stop_loss: stopLevel,
+          take_profit: profitLevel,
+        });
+        ledgerId = ledger.id;
+
+        await persistenceService.logTradeActivity({
+          trade_ledger_id: ledger.id,
+          activity_type: 'MODIFICATION',
+          stop_loss: stopLevel,
+          take_profit: profitLevel,
+          broker_response: response.data
         });
       } catch (err) {
         console.error("Failed to log position modification:", err);
       }
 
-      return response.data;
+      // Return updated state so Evan can refresh UI
+      return {
+        ...response.data,
+        ledgerId,
+        stopLevel,
+        profitLevel
+      };
     } catch (error: any) {
       if (error.response?.status === 401) {
         await this.authenticate();
         return this.modifyPosition(dealId, stopLevel, profitLevel);
       }
+      console.error("Broker Modify Error:", error.response?.data || error.message);
       throw error;
     }
   }
@@ -388,9 +443,16 @@ export class BrokerService {
       // Persistence: Capture snapshot and update trade status
       try {
         const snapshot = await this.captureSnapshot("EURUSD"); // Default epic
-        await persistenceService.updateTradeStatus(dealId, 'CLOSED', {
+        const ledger = await persistenceService.updateTradeStatus(dealId, 'CLOSED', {
           close_snapshot_id: snapshot.id,
           close_response: response.data
+        });
+
+        await persistenceService.logTradeActivity({
+          trade_ledger_id: ledger.id,
+          activity_type: 'CLOSURE',
+          price: snapshot.market_context.bid,
+          broker_response: response.data
         });
       } catch (logError) {
         console.error("Failed to log position closure to persistence:", logError);

@@ -37,16 +37,20 @@ interface AISuggestion {
   take_profit: number;
   confidence_score: number;
   reasoning: string;
+  context_id?: string;
+  context_log_id?: string;
 }
 
 interface OrbitCommandProps {
   onExecute: (suggestion: AISuggestion) => void;
-  onReject: () => void;
+  onReject: (suggestion: AISuggestion) => void;
   currentPrice?: number;
 }
 
 export const OrbitCommand: React.FC<OrbitCommandProps> = ({ onExecute, onReject, currentPrice }) => {
+  const [epic, setEpic] = useState<string>("EURUSD");
   const [context, setContext] = useState<any>(null);
+  const [contextId, setContextId] = useState<string | null>(null);
   const [suggestion, setSuggestion] = useState<AISuggestion | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showContext, setShowContext] = useState(false);
@@ -70,10 +74,11 @@ export const OrbitCommand: React.FC<OrbitCommandProps> = ({ onExecute, onReject,
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('http://localhost:4000/api/market/context?symbol=EURUSD');
+      const response = await fetch(`http://localhost:4000/api/market/context?symbol=${epic}`);
       if (!response.ok) throw new Error('Failed to prepare context');
       const data = await response.json();
-      setContext(data);
+      setContext(data.context);
+      setContextId(data.context_id);
       setShowContext(true);
     } catch (err: any) {
       console.error('Failed to prepare context:', err);
@@ -97,7 +102,7 @@ export const OrbitCommand: React.FC<OrbitCommandProps> = ({ onExecute, onReject,
       const response = await fetch('http://localhost:4000/api/ai/suggest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol: 'EURUSD' })
+        body: JSON.stringify({ symbol: epic, context_id: contextId })
       });
       if (!response.ok) {
         const data = await response.json();
@@ -131,12 +136,29 @@ export const OrbitCommand: React.FC<OrbitCommandProps> = ({ onExecute, onReject,
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden backdrop-blur-md flex flex-col h-full">
-      <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between bg-white/5">
+      <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between bg-white/5 flex-wrap gap-2">
         <h3 className="font-semibold text-white flex items-center gap-2">
           <Terminal className="w-4 h-4 text-blue-400" />
           Orbit Command
         </h3>
-        <div className="flex gap-2">
+        
+        <div className="flex gap-2 items-center ml-auto">
+          <select
+            value={epic}
+            onChange={(e) => {
+              setEpic(e.target.value);
+              setContext(null);
+              setContextId(null);
+              setSuggestion(null);
+            }}
+            className="bg-black/50 border border-white/10 rounded-lg px-2 py-1 text-white font-mono focus:outline-none text-[10px] appearance-none"
+          >
+            <option value="EURUSD">EUR/USD</option>
+            <option value="GBPUSD">GBP/USD</option>
+            <option value="USDJPY">USD/JPY</option>
+            <option value="AUDUSD">AUD/USD</option>
+          </select>
+
           <button
             onClick={prepareContext}
             disabled={isLoading}
@@ -157,6 +179,7 @@ export const OrbitCommand: React.FC<OrbitCommandProps> = ({ onExecute, onReject,
       </div>
 
       <div className="p-6 flex-grow overflow-y-auto space-y-6">
+
         {context && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -245,14 +268,21 @@ export const OrbitCommand: React.FC<OrbitCommandProps> = ({ onExecute, onReject,
 
             <div className="flex gap-3">
               <button
-                onClick={() => onExecute({ ...suggestion, amount: editSize, stop_loss: editSL, take_profit: editTP })}
+                onClick={() => onExecute({ 
+                  ...suggestion, 
+                  amount: editSize, 
+                  stop_loss: editSL, 
+                  take_profit: editTP,
+                  reasoning: suggestion.reasoning, 
+                  context_id: suggestion.context_log_id || suggestion.context_id || contextId || undefined
+                })}
                 className="flex-1 group flex items-center justify-center gap-2 py-4 rounded-xl bg-emerald-600 text-white font-black text-sm hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-600/20 active:scale-[0.98]"
               >
                 <Rocket className="w-5 h-5" />
                 Execute Trade
               </button>
               <button
-                onClick={() => { setSuggestion(null); onReject(); }}
+                onClick={() => { onReject(suggestion); setSuggestion(null); }}
                 className="px-6 py-4 rounded-xl bg-white/5 text-slate-400 font-bold text-sm hover:bg-white/10 transition-all active:scale-[0.98]"
               >
                 <XCircle className="w-5 h-5" />
